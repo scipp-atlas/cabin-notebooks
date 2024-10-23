@@ -252,4 +252,38 @@ def effic_loss_fn(y_pred, y_true, features, net,
 
     return loss
 
+def make_ROC_curve(y_test, y_pred_test):
+    fpr, tpr, _ = roc_curve(y_test, y_pred_test.numpy())
+    roc_auc = roc_auc_score(y_test, y_pred_test.numpy())
+    
+    plt.figure(1)
+    lw = 2
+    plt.plot(fpr, tpr, color="darkorange", label="DNN (area = {:.3f})".format(roc_auc))
+    plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False positive rate')
+    plt.ylabel('True positive rate')
+    plt.title('ROC curve')
+    plt.legend(loc="lower right")
+    plt.show()
 
+def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test):
+    signal_train=[]
+    signal_test =[]
+    backgr_train=[]
+    backgr_test =[]
+    for y,y_p in zip(y_train,y_pred_train):
+        if y==1: signal_train.append(float(y_p))
+        else:    backgr_train.append(float(y_p))
+    for y,y_p in zip(y_test,y_pred_test):
+        if y==1: signal_test.append(float(y_p))
+        else:    backgr_test.append(float(y_p))
+    
+    nbins=20
+    signal_train_hist=plt.hist(signal_train,nbins,density=True,range=(0,1),histtype='stepfilled',alpha=0.5,color='red')
+    backgr_train_hist=plt.hist(backgr_train,nbins,density=True,range=(0,1),histtype='stepfilled',alpha=0.5,color='blue')
+    signal_test=ListToGraph(signal_test,nbins,"red")
+    backgr_test=ListToGraph(backgr_test,nbins,"blue")
+    plt.yscale("log")
+    plt.show()
