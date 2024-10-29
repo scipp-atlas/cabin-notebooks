@@ -139,10 +139,38 @@ def outputs_to_labels(net_outputs, features):
     #print(targets)
     return targets
 
+class lossvars():
+
+    def __init__(self):
+        self.efficloss = 0
+        self.backgloss = 0
+        self.cutszloss = 0
+        self.monotloss = 0
+        self.signaleffic = 0
+        self.backgreffic = 0
+    
+    def totalloss(self):
+        return self.efficloss + self.backgloss + self.cutszloss + self.monotloss
+
+    def __add__(self,other):
+        third=lossvars()
+        third.efficloss = self.efficloss + other.efficloss
+        third.backgloss = self.backgloss + other.backgloss
+        third.cutszloss = self.cutszloss + other.cutszloss
+        third.monotloss = self.monotloss + other.monotloss
+        third.signaleffic = []
+        third.signaleffic.append(self.signaleffic)
+        third.signaleffic.append(other.signaleffic)
+        third.backgreffic = []
+        third.backgreffic.append(self.backgreffic)
+        third.backgreffic.append(other.backgreffic)
+        return third
 
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
              alpha=1., beta=1., gamma=0.001):
+
+    loss = lossvars()
     
     # this is differentiable, unlike using torch.all(torch.gt()) or something else that yields booleans.
     # will converge to 1 for things that pass all cuts, and to zero for things that fail any single cut.
@@ -150,11 +178,11 @@ def loss_fn (y_pred, y_true, features, net,
 
     # signal efficiency: (selected events that are true signal) / (number of true signal)
     signal_results = all_results * y_true
-    signal_efficiency = torch.sum(signal_results)/torch.sum(y_true)
+    loss.signaleffic = torch.sum(signal_results)/torch.sum(y_true)
 
     # background efficiency: (selected events that are true background) / (number of true background)
     background_results = all_results * (1.-y_true)
-    background_efficiency = torch.sum(background_results)/(torch.sum(1.-y_true))
+    loss.backgreffic = torch.sum(background_results)/(torch.sum(1.-y_true))
 
     cuts=-net.bias/net.weight
     
@@ -169,28 +197,28 @@ def loss_fn (y_pred, y_true, features, net,
     # calculated from r^2 distance.
     #
     # for both we should prefer to do something like "sum(square())" or something.
-    efficloss = alpha*torch.square(target_signal_efficiency-signal_efficiency)
-    backgloss = beta*background_efficiency
-    cutszloss = gamma*torch.sum(torch.square(cuts))/features
-    loss = efficloss + backgloss + cutszloss
+    loss.efficloss = alpha*torch.square(target_signal_efficiency-loss.signaleffic)
+    loss.backgloss = beta*loss.backgreffic
+    loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
     
     # sanity check in case we ever need it, should work
     #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
     
-    return loss, signal_efficiency, background_efficiency, efficloss, backgloss, cutszloss
+    return loss
 
 
 class EfficiencyScanNetwork(torch.nn.Module):
-    def __init__(self,features,effics,activationscale=2.):
+    def __init__(self,features,effics,weights=None,activationscale=2.):
         super().__init__()
         self.features = features
         self.effics = effics
+        self.weights = weights
         self.activation_input_scale_factor=activationscale
-        self.nets = torch.nn.ModuleList([OneToOneLinear(features) for i in range(len(self.effics))])
-        self.activation = OneToOneLinearActivation()
+        self.nets = torch.nn.ModuleList([OneToOneLinear(features, weights) for i in range(len(self.effics))])
+        self.activation = OneToOneLinearActivation(self.activation_input_scale_factor)
 
     def forward(self, x):
-        outputs=torch.stack(tuple(self.activation(self.activation_input_scale_factor*self.nets[i](x)) for i in range(len(self.effics))))
+        outputs=torch.stack(tuple(self.activation(self.nets[i](x)) for i in range(len(self.effics))))
         return outputs
 
 
@@ -205,12 +233,14 @@ def effic_loss_fn(y_pred, y_true, features, net,
         efficnet = net.nets[i]
         l=loss_fn(y_pred[i], y_true, features, 
                   efficnet, effic,
-                  alpha, beta, gamma)[0]
+                  alpha, beta, gamma)
         if sumefficlosses==None:
             sumefficlosses=l
         else:
-            sumefficlosses=torch.add(sumefficlosses,l)
-        
+            #sumefficlosses=torch.add(sumefficlosses,l)
+            sumefficlosses = sumefficlosses + l
+
+    loss=sumefficlosses
     # now set up global penalty for cuts that vary net by net.
     # some options:
     # a. penalize a large range of cut values
@@ -258,9 +288,7 @@ def effic_loss_fn(y_pred, y_true, features, net,
             else:
                 featureloss = featureloss + fl
         sumfeaturelosses = torch.sum(featureloss)/(3.*(len(sortedeffics)-2))/features
-        loss = sumefficlosses + epsilon*sumfeaturelosses    
-    else:
-        loss = sumefficlosses
+        loss.monotloss = epsilon*sumfeaturelosses    
 
     return loss
 
@@ -299,3 +327,17 @@ def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test):
     backgr_test=ListToGraph(backgr_test,nbins,"blue")
     plt.yscale("log")
     plt.show()
+
+
+def plotlosses(losses, test_losses):
+    plt.plot([l.totalloss().detach().numpy() for l in losses], '.', label="Train")
+    plt.plot([l.totalloss().detach().numpy() for l in test_losses], '.', label="Test")
+    plt.plot([l.efficloss.detach().numpy() for l in losses], '.', label="Train: effic")
+    plt.plot([l.backgloss.detach().numpy() for l in losses], '.', label="Train: backg")
+    plt.plot([l.cutszloss.detach().numpy() for l in losses], '.', label="Train: cutsz")
+    if type(losses[0].monotloss) is not int:
+        plt.plot([l.monotloss.detach().numpy() for l in losses], '.', label="Train: smooth")
+    plt.legend()
+    plt.xlabel('Training Epoch')
+    plt.ylabel('Cross Entropy Loss')
+    plt.yscale('log');
