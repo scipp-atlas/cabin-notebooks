@@ -49,19 +49,28 @@ class OneToOneLinear(torch.nn.Module):
     features: int
     weight: Tensor
 
-    def __init__(self, features: int, 
-                 device=None, dtype=None) -> None:
+    def __init__(self, 
+                 features: int, 
+                 weights=None,
+                 device=None, 
+                 dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.features = features
-        self.weight = Parameter(torch.empty(features, **factory_kwargs))
+        self.trainable_weights=(weights==None or len(weights)!=features)
+        if self.trainable_weights:
+            self.weight = Parameter(torch.empty(features, **factory_kwargs))
+        else:
+            self.weight = torch.tensor(weights)
         self.bias = Parameter(torch.empty(features, **factory_kwargs))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         bound=1./math.sqrt(self.features)
-        torch.nn.init.uniform_(self.weight, -bound, bound)
-        torch.nn.init.uniform_(self.bias, -bound, bound)
+        if self.trainable_weights:
+            torch.nn.init.uniform_(self.weight, -bound, bound)
+        #torch.nn.init.uniform_(self.bias, -bound, bound)
+        torch.nn.init.zeros_(self.bias)
 
     def forward(self, input: Tensor) -> Tensor:
 
@@ -160,12 +169,15 @@ def loss_fn (y_pred, y_true, features, net,
     # calculated from r^2 distance.
     #
     # for both we should prefer to do something like "sum(square())" or something.
-    loss = alpha*torch.square(target_signal_efficiency-signal_efficiency) + beta*background_efficiency + gamma*torch.sum(torch.square(cuts))/features
+    efficloss = alpha*torch.square(target_signal_efficiency-signal_efficiency)
+    backgloss = beta*background_efficiency
+    cutszloss = gamma*torch.sum(torch.square(cuts))/features
+    loss = efficloss + backgloss + cutszloss
     
     # sanity check in case we ever need it, should work
     #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
     
-    return loss, signal_efficiency, background_efficiency
+    return loss, signal_efficiency, background_efficiency, efficloss, backgloss, cutszloss
 
 
 class EfficiencyScanNetwork(torch.nn.Module):
