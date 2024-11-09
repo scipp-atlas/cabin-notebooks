@@ -158,17 +158,27 @@ class lossvars():
         third.backgloss = self.backgloss + other.backgloss
         third.cutszloss = self.cutszloss + other.cutszloss
         third.monotloss = self.monotloss + other.monotloss
-        third.signaleffic = []
-        third.signaleffic.append(self.signaleffic)
-        third.signaleffic.append(other.signaleffic)
-        third.backgreffic = []
-        third.backgreffic.append(self.backgreffic)
-        third.backgreffic.append(other.backgreffic)
+
+        if type(self.signaleffic) is list:
+            third.signaleffic = self.signaleffic
+            third.signaleffic.append(other.signaleffic)
+        else:
+            third.signaleffic = []
+            third.signaleffic.append(self.signaleffic)
+            third.signaleffic.append(other.signaleffic)
+        if type(self.backgreffic) is list:
+            third.backgreffic = self.backgreffic
+            third.backgreffic.append(other.backgreffic)
+        else:
+            third.backgreffic = []
+            third.backgreffic.append(self.backgreffic)
+            third.backgreffic.append(other.backgreffic)
         return third
 
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
-             alpha=1., beta=1., gamma=0.001):
+             alpha=1., beta=1., gamma=0.001,
+             debug=False):
 
     loss = lossvars()
     
@@ -176,6 +186,11 @@ def loss_fn (y_pred, y_true, features, net,
     # will converge to 1 for things that pass all cuts, and to zero for things that fail any single cut.
     all_results=torch.prod(y_pred,dim=1)
 
+    # rescale the signal and background efficiencies to take into account the fact that all weights will be <1.
+    sum_of_weights=torch.sum(all_results)
+    scale_factor=len(y_pred)/sum_of_weights
+    # is this right?  pick up here.
+    
     # signal efficiency: (selected events that are true signal) / (number of true signal)
     signal_results = all_results * y_true
     loss.signaleffic = torch.sum(signal_results)/torch.sum(y_true)
@@ -200,6 +215,9 @@ def loss_fn (y_pred, y_true, features, net,
     loss.efficloss = alpha*torch.square(target_signal_efficiency-loss.signaleffic)
     loss.backgloss = beta*loss.backgreffic
     loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
+
+    if debug:
+        print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency}, subnet_effic={loss.signaleffic}, efficloss={loss.efficloss}")
     
     # sanity check in case we ever need it, should work
     #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
@@ -218,7 +236,7 @@ class EfficiencyScanNetwork(torch.nn.Module):
         self.activation = OneToOneLinearActivation(self.activation_input_scale_factor)
 
     def forward(self, x):
-        outputs=torch.stack(tuple(self.activation(self.nets[i](x)) for i in range(len(self.effics))))
+        outputs=torch.stack(tuple(self.activation(self.activation_input_scale_factor*self.nets[i](x)) for i in range(len(self.effics))))
         return outputs
 
 
@@ -233,7 +251,7 @@ def effic_loss_fn(y_pred, y_true, features, net,
         efficnet = net.nets[i]
         l=loss_fn(y_pred[i], y_true, features, 
                   efficnet, effic,
-                  alpha, beta, gamma)
+                  alpha, beta, gamma, debug)
         if sumefficlosses==None:
             sumefficlosses=l
         else:
@@ -341,3 +359,43 @@ def plotlosses(losses, test_losses):
     plt.xlabel('Training Epoch')
     plt.ylabel('Cross Entropy Loss')
     plt.yscale('log');
+
+def ploteffics(losses, targeteffics):
+    if type(losses[0].signaleffic) is list:
+        for e in range(len(losses[0].signaleffic)):
+            p = plt.plot([l.signaleffic[e].detach().numpy() for l in losses], '.', label=f"Effic: {100.*targeteffics[e]:3.1f}%")
+            p = plt.plot([l.backgreffic[e].detach().numpy() for l in losses], '-', color=plt.gca().lines[-1].get_color(), label="BG effic")
+    else:
+        plt.plot([l.signaleffic.detach().numpy() for l in losses], '.', label=f"Effic: {100.*targeteffics[0]:3.1f}%")
+        plt.plot([l.backgreffic.detach().numpy() for l in losses], '.', color=plt.gca().lines[-1].get_color(), label="BG effic")
+    plt.legend()
+    plt.xlabel('Training Epoch')
+    plt.ylabel('Signal Efficiency')
+    #plt.yscale('log')
+
+def check_effic(x_test_tensor, y_test, net, printout=True):
+    num_pass_test=0.
+    num_bg_pass_test=0.
+    test_outputs = net(x_test_tensor).detach().cpu()
+    m=test_outputs.shape[1]
+    trues=torch.tensor(m*[True])
+    for i in range(len(test_outputs)):
+    
+        tt=torch.zeros(m)
+        t=torch.gt(test_outputs[i],tt)
+    
+        if torch.equal(t,trues) and y_test[i]==1.:
+            num_pass_test+=1
+        elif torch.equal(t,trues) and y_test[i]!=1.:
+            num_bg_pass_test+=1.
+        
+    
+    effic_test    = num_pass_test    / np.sum(y_test)
+    bg_effic_test = num_bg_pass_test / np.sum(1.-y_test)
+
+    if printout:
+        print(f"Signal Efficiency with net outputs: {100*effic_test:4.1f}%")
+        print(f"Background Efficiency with net outputs: {100*bg_effic_test:6.5f}%")
+
+    # do we want to return anything here?
+    return effic_test,bg_effic_test
