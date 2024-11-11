@@ -50,19 +50,22 @@ class OneToOneLinear(torch.nn.Module):
     weight: Tensor
 
     def __init__(self, 
-                 features: int, 
+                 features: int,
+                 scalefactor=None, 
                  weights=None,
                  device=None, 
                  dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.features = features
+        print(weights)
         self.trainable_weights=(weights==None or len(weights)!=features)
         if self.trainable_weights:
             self.weight = Parameter(torch.empty(features, **factory_kwargs))
         else:
             self.weight = torch.tensor(weights)
         self.bias = Parameter(torch.empty(features, **factory_kwargs))
+        self.activation_scale_factor = scalefactor
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -77,32 +80,11 @@ class OneToOneLinear(torch.nn.Module):
         # need to turn the "weights" vector into a matrix with the vector 
         # elements on the diagonal, and zeroes everywhere else.
         targets = torch.matmul(input,torch.diag(self.weight))+self.bias
+        targets = torch.sigmoid(self.activation_scale_factor*targets)
         return targets
 
     def extra_repr(self) -> str:
         return f'in_features={self.features}, bias={self.bias}'
-
-
-class OneToOneLinearActivation(torch.nn.Module):
-    __constants__ = ['inplace']
-    inplace: bool
-    scalefactor: float
-
-    def __init__(self,
-                 scalefactor = 1.0, 
-                 inplace: bool = False):
-        super().__init__()
-        self.inplace = inplace
-        self.scalefactor = scalefactor
-
-    def forward(self, input: Tensor) -> Tensor:
-        # scalefactor is so we can make the activation a 
-        # bit steeper, to get to 0 or 1 more rapidly.
-        return torch.sigmoid(self.scalefactor*input)
-
-    def extra_repr(self) -> str:
-        inplace_str = 'inplace=True' if self.inplace else ''
-        return inplace_str
 
 
 # net_outputs in this case is a list of output scores for each event, one score per input features.
@@ -231,12 +213,11 @@ class EfficiencyScanNetwork(torch.nn.Module):
         self.features = features
         self.effics = effics
         self.weights = weights
-        self.activation_input_scale_factor=activationscale
-        self.nets = torch.nn.ModuleList([OneToOneLinear(features, weights) for i in range(len(self.effics))])
-        self.activation = OneToOneLinearActivation(self.activation_input_scale_factor)
+        self.activation_scale_factor=activationscale
+        self.nets = torch.nn.ModuleList([OneToOneLinear(features, self.activation_scale_factor, self.weights) for i in range(len(self.effics))])
 
     def forward(self, x):
-        outputs=torch.stack(tuple(self.activation(self.activation_input_scale_factor*self.nets[i](x)) for i in range(len(self.effics))))
+        outputs=torch.stack(tuple(self.nets[i](x) for i in range(len(self.effics))))
         return outputs
 
 
@@ -381,7 +362,7 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
     trues=torch.tensor(m*[True])
     for i in range(len(test_outputs)):
     
-        tt=torch.zeros(m)
+        tt=torch.zeros(m)+0.5
         t=torch.gt(test_outputs[i],tt)
     
         if torch.equal(t,trues) and y_test[i]==1.:
