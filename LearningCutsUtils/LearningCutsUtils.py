@@ -61,6 +61,10 @@ class OneToOneLinear(torch.nn.Module):
         #print(weights)
         self.trainable_weights=(weights==None or len(weights)!=features)
         if self.trainable_weights:
+            if weights==None:
+                print("This network will learn weights and biases, since no weights were supplied.")
+            elif len(weights)!=features:
+                print(f"This network will learn weights and biases, since num weights ({len(weights)}) does not match num features ({features}).")
             self.weight = Parameter(torch.empty(features, **factory_kwargs))
         else:
             self.weight = torch.tensor(weights)
