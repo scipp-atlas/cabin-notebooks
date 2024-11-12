@@ -426,7 +426,7 @@ def plotfeatures(net,x_signal,x_backgr,sc):
         biases=net.nets[n].bias.detach().numpy()
         weights=net.nets[n].weight.detach().numpy()
         scaled_cuts=-biases/weights
-        print(f"Cuts are: {scaled_cuts}")
+        #print(f"Cuts are: {scaled_cuts}")
         
         x_signal_scaled=sc.transform(x_signal)
         x_backgr_scaled=sc.transform(x_backgr)
