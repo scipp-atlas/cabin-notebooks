@@ -58,7 +58,7 @@ class OneToOneLinear(torch.nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.features = features
-        print(weights)
+        #print(weights)
         self.trainable_weights=(weights==None or len(weights)!=features)
         if self.trainable_weights:
             self.weight = Parameter(torch.empty(features, **factory_kwargs))
@@ -260,13 +260,15 @@ def effic_loss_fn(y_pred, y_true, features, net,
     #
     # see e.g. https://pypi.org/project/monotonicnetworks/ for a more complicated treatment
     #
+    # Note that this also has issues since sortedeffics won't necessarily have the same
+    # index mapping as 'nets'....  so lots of potential problems here.
+    #
+    #
     sortedeffics=sorted(net.effics)
 
     if len(sortedeffics)>=3:
         def getcuts(subnet):
             return -subnet.bias/subnet.weight
-        def getweights(subnet):
-            return subnet.weight
         featureloss = None
         for i in range(1,len(sortedeffics)-1):
             cuts_i   = getcuts(net.nets[i  ])
@@ -276,11 +278,14 @@ def effic_loss_fn(y_pred, y_true, features, net,
             # calculate distance between cuts.  
             fl = torch.pow(cuts_i-cuts_im1,2) + torch.pow(cuts_i-cuts_ip1,2) + torch.pow(cuts_im1-cuts_ip1,2)
 
-            # also need some term that penalizes weights that change sign.  going from positive to negative
-            # weights will change the interpretation from "less than" to "greater than" or vice versa.
-            fl = fl + \
-            (features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i-1].weight))) + \
-            (features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i+1].weight)))
+            # don't think we need this anymore, if we're fixing the lt vs gt interpretation of cuts by fixing weights
+            # when initializing the efficiency scan network:
+            #
+            ## also need some term that penalizes weights that change sign.  going from positive to negative
+            ## weights will change the interpretation from "less than" to "greater than" or vice versa.
+            #fl = fl + \
+            #(features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i-1].weight))) + \
+            #(features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i+1].weight)))
             
             if featureloss == None:
                 featureloss = fl
@@ -377,6 +382,61 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
     if printout:
         print(f"Signal Efficiency with net outputs: {100*effic_test:4.1f}%")
         print(f"Background Efficiency with net outputs: {100*bg_effic_test:6.5f}%")
+    else:
+        # do we want to return anything here?
+        return effic_test,bg_effic_test
 
-    # do we want to return anything here?
-    return effic_test,bg_effic_test
+def plotcuts(net):
+    fig = plt.figure(figsize=(20,5))
+    fig.tight_layout()
+    targeteffics=net.effics
+    m=net.features
+    
+    scaled_cuts=[len(targeteffics)*[0] for i in range(m)]
+    for n in range(len(targeteffics)):
+        biases=net.nets[n].bias.detach().numpy()
+        weights=net.nets[n].weight.detach().numpy()
+        cuts=(-biases/weights)
+        for f in range(m):
+            cutval=cuts[f]
+            scaled_cuts[f][n]=cutval
+    for b in range(m):
+        ax=fig.add_subplot(2,5,1+b)
+        plt.subplots_adjust(hspace=0.6,wspace=0.5)
+        ax.plot(targeteffics,scaled_cuts[b])
+        ax.set_xlabel(f"Target Efficiency")
+        ax.set_ylabel("Cut value")
+        ax.set_title(f"Feature {b}")
+        ax.set_ylim([-10,10])
+
+def plotfeatures(net,x_signal,x_backgr,sc):
+    # Distributions after scaling
+    targeteffics=net.effics
+    m=net.features
+    for n in range(len(targeteffics)):
+        print(f"Target efficiency: {targeteffics[n]*100}%")
+        fig = plt.figure(figsize=(20,5))
+        fig.tight_layout()
+        nbins=50
+        
+        biases=net.nets[n].bias.detach().numpy()
+        weights=net.nets[n].weight.detach().numpy()
+        scaled_cuts=-biases/weights
+        print(f"Cuts are: {scaled_cuts}")
+        
+        x_signal_scaled=sc.transform(x_signal)
+        x_backgr_scaled=sc.transform(x_backgr)
+        
+        for b in range(m):
+            ax=fig.add_subplot(2,5,1+b)
+            plt.subplots_adjust(hspace=0.3,wspace=0.5)
+            plt.yscale('log')
+            ax.hist(x_signal_scaled[:,b],nbins,density=True,histtype='stepfilled',alpha=0.5,color='red')
+            ax.hist(x_backgr_scaled[:,b],nbins,density=True,histtype='stepfilled',alpha=0.5,color='blue')
+            ax.set_xlabel(f"Feature {b}")
+            ax.set_ylabel("Events/Bin")
+            if weights[b] < 0:
+                ax.axvline(x = scaled_cuts[b], color='g') # cut is "less than"
+            else:
+                ax.axvline(x = scaled_cuts[b], color='y') # cut is "greater than"
+        plt.show()
