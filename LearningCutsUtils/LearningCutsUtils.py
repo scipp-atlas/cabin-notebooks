@@ -52,13 +52,13 @@ class OneToOneLinear(torch.nn.Module):
     def __init__(self, 
                  features: int,
                  scalefactor=None, 
-                 weights=None,
-                 device=None, 
+                 weights=None, 
+                 postroot=None,
+                 device=None,
                  dtype=None) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.features = features
-        #print(weights)
         self.trainable_weights=(weights==None or len(weights)!=features)
         if self.trainable_weights:
             if weights==None:
@@ -70,60 +70,43 @@ class OneToOneLinear(torch.nn.Module):
             self.weight = torch.tensor(weights)
         self.bias = Parameter(torch.empty(features, **factory_kwargs))
         self.activation_scale_factor = scalefactor
+        self.post_product_root = postroot if postroot != None else 1.0
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         bound=1./math.sqrt(self.features)
         if self.trainable_weights:
             torch.nn.init.uniform_(self.weight, -bound, bound)
-        #torch.nn.init.uniform_(self.bias, -bound, bound)
         torch.nn.init.zeros_(self.bias)
 
-    def forward(self, input: Tensor) -> Tensor:
+    def get_cuts(self) -> Tensor:
+        return -self.bias/self.weight
 
+    def apply_cuts(self, input: Tensor) -> Tensor:
         # need to turn the "weights" vector into a matrix with the vector 
         # elements on the diagonal, and zeroes everywhere else.
         targets = torch.matmul(input,torch.diag(self.weight))+self.bias
+        return targets
+
+    def forward(self, input: Tensor) -> Tensor:
+        # apply the cuts
+        targets = self.apply_cuts(input)
+
+        # activation function
         targets = torch.sigmoid(self.activation_scale_factor*targets)
+
+        # this is differentiable, unlike using torch.all(torch.gt()) or something else that yields booleans.
+        # will converge to 1 for things that pass all cuts, and to zero for things that fail any single cut.
+        targets=torch.prod(targets,dim=1)
+
+        # optionally take the root of the targets
+        targets=torch.pow(targets,1./self.post_product_root)
+
         return targets
 
     def extra_repr(self) -> str:
         return f'in_features={self.features}, bias={self.bias}'
 
-
-# net_outputs in this case is a list of output scores for each event, one score per input features.
-# need to try to push these towards 1 for signal, and 0 for background.
-def outputs_to_labels(net_outputs, features):
-    # an infinity norm.  this gives good efficiency, but basically gives up on a number
-    # of cuts for reasons that are unclear to me, setting cut values way below or above
-    # both signal and background distributions.  Can use either min or max, give very
-    # similar results.
-    #
-    # targets = torch.min(torch.abs(net_outputs),1,keepdim=True).values.squeeze(1)
-
-    # do the silly thing and sum over all the outputs.  each output weighted the same,
-    # misclassification contributes to a larger loss value.
-    # This gives an excellent summary score that has near perfect discrimination,
-    # but does a terrible job of creating a set of cuts that has good efficiency, at
-    # least when combined with a BCE loss function.  Each individual cut is snug up
-    # against where signal and background distributions cross, almost perfectly.  it
-    # looks pretty, but not useful combined with BCE.
-    #
-    targets = torch.sum(net_outputs,1)/features
-    
-    # there's no variation on this that seems to work well. 
-    # loss function is capped within a range less than [0,1], or get errors.
-    #
-    # targets = torch.sqrt(torch.sum(torch.square(net_outputs,1))/features
-
-    # this doesn't seem to work at all.  not sure why.
-    #print(net_outputs[0])
-    #print(torch.gt(net_outputs[0],0.5))
-    #print(torch.all(torch.gt(net_outputs[0],0.5)))
-    # targets = torch.autograd.Variable(torch.all(torch.gt(net_outputs,0.5),dim=1).float(), requires_grad=True)
-    
-    #print(targets)
-    return targets
 
 class lossvars():
 
@@ -168,24 +151,15 @@ def loss_fn (y_pred, y_true, features, net,
 
     loss = lossvars()
     
-    # this is differentiable, unlike using torch.all(torch.gt()) or something else that yields booleans.
-    # will converge to 1 for things that pass all cuts, and to zero for things that fail any single cut.
-    all_results=torch.prod(y_pred,dim=1)
-
-    # rescale the signal and background efficiencies to take into account the fact that all weights will be <1.
-    sum_of_weights=torch.sum(all_results)
-    scale_factor=len(y_pred)/sum_of_weights
-    # is this right?  pick up here.
-    
     # signal efficiency: (selected events that are true signal) / (number of true signal)
-    signal_results = all_results * y_true
+    signal_results = y_pred * y_true
     loss.signaleffic = torch.sum(signal_results)/torch.sum(y_true)
 
     # background efficiency: (selected events that are true background) / (number of true background)
-    background_results = all_results * (1.-y_true)
+    background_results = y_pred * (1.-y_true)
     loss.backgreffic = torch.sum(background_results)/(torch.sum(1.-y_true))
 
-    cuts=-net.bias/net.weight
+    cuts=net.get_cuts()
     
     # * force signal efficiency to converge to a target value
     # * force background efficiency to small values at target efficiency value.
@@ -212,13 +186,14 @@ def loss_fn (y_pred, y_true, features, net,
 
 
 class EfficiencyScanNetwork(torch.nn.Module):
-    def __init__(self,features,effics,weights=None,activationscale=2.):
+    def __init__(self,features,effics,weights=None,activationscale=2.,postroot=1.):
         super().__init__()
         self.features = features
         self.effics = effics
         self.weights = weights
         self.activation_scale_factor=activationscale
-        self.nets = torch.nn.ModuleList([OneToOneLinear(features, self.activation_scale_factor, self.weights) for i in range(len(self.effics))])
+        self.post_product_root=postroot
+        self.nets = torch.nn.ModuleList([OneToOneLinear(features, self.activation_scale_factor, self.weights, self.post_product_root) for i in range(len(self.effics))])
 
     def forward(self, x):
         outputs=torch.stack(tuple(self.nets[i](x) for i in range(len(self.effics))))
@@ -271,13 +246,11 @@ def effic_loss_fn(y_pred, y_true, features, net,
     sortedeffics=sorted(net.effics)
 
     if len(sortedeffics)>=3:
-        def getcuts(subnet):
-            return -subnet.bias/subnet.weight
         featureloss = None
         for i in range(1,len(sortedeffics)-1):
-            cuts_i   = getcuts(net.nets[i  ])
-            cuts_im1 = getcuts(net.nets[i-1])
-            cuts_ip1 = getcuts(net.nets[i+1])
+            cuts_i   = net.nets[i  ].get_cuts()
+            cuts_im1 = net.nets[i-1].get_cuts()
+            cuts_ip1 = net.nets[i+1].get_cuts()
 
             # calculate distance between cuts.  
             fl = torch.pow(cuts_i-cuts_im1,2) + torch.pow(cuts_i-cuts_ip1,2) + torch.pow(cuts_im1-cuts_ip1,2)
@@ -366,12 +339,12 @@ def ploteffics(losses, targeteffics):
 def check_effic(x_test_tensor, y_test, net, printout=True):
     num_pass_test=0.
     num_bg_pass_test=0.
-    test_outputs = net(x_test_tensor).detach().cpu()
+    test_outputs = net.apply_cuts(x_test_tensor).detach().cpu()
     m=test_outputs.shape[1]
     trues=torch.tensor(m*[True])
     for i in range(len(test_outputs)):
     
-        tt=torch.zeros(m)+0.5
+        tt=torch.zeros(m)
         t=torch.gt(test_outputs[i],tt)
     
         if torch.equal(t,trues) and y_test[i]==1.:
@@ -398,9 +371,7 @@ def plotcuts(net):
     
     scaled_cuts=[len(targeteffics)*[0] for i in range(m)]
     for n in range(len(targeteffics)):
-        biases=net.nets[n].bias.detach().numpy()
-        weights=net.nets[n].weight.detach().numpy()
-        cuts=(-biases/weights)
+        cuts=net.nets[n].get_cuts().detach().numpy()
         for f in range(m):
             cutval=cuts[f]
             scaled_cuts[f][n]=cutval
@@ -423,10 +394,8 @@ def plotfeatures(net,x_signal,x_backgr,sc):
         fig.tight_layout()
         nbins=50
         
-        biases=net.nets[n].bias.detach().numpy()
         weights=net.nets[n].weight.detach().numpy()
-        scaled_cuts=-biases/weights
-        #print(f"Cuts are: {scaled_cuts}")
+        scaled_cuts=net.nets[n].get_cuts().detach().numpy()
         
         x_signal_scaled=sc.transform(x_signal)
         x_backgr_scaled=sc.transform(x_backgr)
