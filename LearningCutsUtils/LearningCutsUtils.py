@@ -94,14 +94,19 @@ class OneToOneLinear(torch.nn.Module):
 
         # activation function
         targets = torch.sigmoid(self.activation_scale_factor*targets)
+     
+        # optionally take the root of the targets
+        # had thought this might be a good way to reduce bias introduced
+        # by taking the product of so many sigmoids, but this destroys
+        # the good agreement we see between the "actual" efficiency
+        # and the efficiency we calculate in the loss function.  
+        # so, for now, make sure post_product_root remains 1.0.
+        targets=targets**(1./self.post_product_root)
 
         # this is differentiable, unlike using torch.all(torch.gt()) or something else that yields booleans.
         # will converge to 1 for things that pass all cuts, and to zero for things that fail any single cut.
         targets=torch.prod(targets,dim=1)
-
-        # optionally take the root of the targets
-        targets=torch.pow(targets,1./self.post_product_root)
-
+        
         return targets
 
     def extra_repr(self) -> str:
@@ -228,20 +233,11 @@ def effic_loss_fn(y_pred, y_true, features, net,
     # go for b for now.
     #
 
-    #
-    # The below implementation isn't quite right, and probably isn't differentiable.
-    # Need to find some way to constrain the variation between adjacent cuts in
-    # a differentiable way, similar to how the torch.all(torch.gt()) thing was 
-    # approximated by torch.prod().
-    #
-    # Could do something like taking the mean of the cut values, subtracting that off,
-    # and...  checking something?
-    #
-    # see e.g. https://pypi.org/project/monotonicnetworks/ for a more complicated treatment
+    # For a fancier way to force monotonic behavior, see e.g. 
+    # https://pypi.org/project/monotonicnetworks/
     #
     # Note that this also has issues since sortedeffics won't necessarily have the same
     # index mapping as 'nets'....  so lots of potential problems here.
-    #
     #
     sortedeffics=sorted(net.effics)
 
@@ -253,23 +249,46 @@ def effic_loss_fn(y_pred, y_true, features, net,
             cuts_ip1 = net.nets[i+1].get_cuts()
 
             # calculate distance between cuts.  
-            fl = torch.pow(cuts_i-cuts_im1,2) + torch.pow(cuts_i-cuts_ip1,2) + torch.pow(cuts_im1-cuts_ip1,2)
-
-            # don't think we need this anymore, if we're fixing the lt vs gt interpretation of cuts by fixing weights
-            # when initializing the efficiency scan network:
+            # would be better to implement this as some kind of distance away from the region 
+            # between the two other cuts.
             #
-            ## also need some term that penalizes weights that change sign.  going from positive to negative
-            ## weights will change the interpretation from "less than" to "greater than" or vice versa.
-            #fl = fl + \
-            #(features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i-1].weight))) + \
-            #(features - torch.sum(torch.tanh(2*net.nets[i].weight)*torch.tanh(net.nets[i+1].weight)))
+            # maybe some kind of dot product?  think about Ising model.
+            #
+            # maybe we just do this for the full set of biases, to see how many transitions there are?  no need for a loop?
+            #
+            # otherwise just implement as a switch that calculates a distance if outside of the range of the two cuts, zero otherwise
+            fl = None
+
+            # ------------------------------------------------------------------
+            # This method just forces cut i to be in between cut i+1 and cut i-1. 
+            #
+            # add some small term so that when cutrange=0 the loss doesn't become undefined  
+            cutrange           =  cuts_ip1-cuts_im1
+            mean               = (cuts_ip1+cuts_im1)/2.
+            distance_from_mean = (cuts_i  -mean)
             
+            # add some offset to denominator to avoid case where cutrange=0.
+            # playing with the exponent doesn't change behavior much.
+            # it's important that this term not become too large, otherwise
+            # the training won't converge.  just a modest penalty for moving
+            # away from the mean should do the trick.
+            exponent=2.  # if this changes, e.g. to 4, then epsilon will also need to increase
+            fl=(distance_from_mean**exponent)/((cutrange**exponent)+0.1)
+            # ------------------------------------------------------------------
+            
+            # ------------------------------------------------------------------
+            ## can also do it this way, which just forces all sequential cuts to be similar.
+            #fl = torch.pow(cuts_i-cuts_im1,2) + torch.pow(cuts_i-cuts_ip1,2) + torch.pow(cuts_im1-cuts_ip1,2)
+            # ------------------------------------------------------------------
+          
             if featureloss == None:
                 featureloss = fl
             else:
                 featureloss = featureloss + fl
-        sumfeaturelosses = torch.sum(featureloss)/(3.*(len(sortedeffics)-2))/features
-        loss.monotloss = epsilon*sumfeaturelosses    
+
+        # need to sum all the contributions to this component of the loss from the different features.
+        sumfeaturelosses = torch.sum(featureloss)/(len(sortedeffics)-2)/features
+        loss.monotloss = epsilon*sumfeaturelosses
 
     return loss
 
@@ -317,7 +336,8 @@ def plotlosses(losses, test_losses):
     plt.plot([l.backgloss.detach().numpy() for l in losses], '.', label="Train: backg")
     plt.plot([l.cutszloss.detach().numpy() for l in losses], '.', label="Train: cutsz")
     if type(losses[0].monotloss) is not int:
-        plt.plot([l.monotloss.detach().numpy() for l in losses], '.', label="Train: smooth")
+        # this particular term can get very small, just cut it off for super small values
+        plt.plot([max(l.monotloss.detach().numpy(),1e-12) for l in losses], '.', label="Train: smooth")
     plt.legend()
     plt.xlabel('Training Epoch')
     plt.ylabel('Cross Entropy Loss')
