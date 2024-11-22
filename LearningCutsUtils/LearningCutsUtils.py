@@ -182,7 +182,7 @@ def loss_fn (y_pred, y_true, features, net,
     loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
 
     if debug:
-        print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency}, subnet_effic={loss.signaleffic}, efficloss={loss.efficloss}")
+        print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency:4.3f}, subnet_effic={loss.signaleffic:5.4f}, efficloss={loss.efficloss:4.3e}, backgloss={loss.backgloss:4.3e}")
     
     # sanity check in case we ever need it, should work
     #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
