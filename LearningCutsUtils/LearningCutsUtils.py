@@ -182,7 +182,7 @@ def loss_fn (y_pred, y_true, features, net,
     loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
 
     if debug:
-        print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency:4.3f}, subnet_effic={loss.signaleffic:5.4f}, efficloss={loss.efficloss:4.3e}, backgloss={loss.backgloss:4.3e}")
+        print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency:4.3f}, subnet_effic={loss.signaleffic:5.4f}, subnet_backg={loss.backgreffic:5.4f}, efficloss={loss.efficloss:4.3e}, backgloss={loss.backgloss:4.3e}")
     
     # sanity check in case we ever need it, should work
     #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
@@ -377,8 +377,8 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
     bg_effic_test = num_bg_pass_test / np.sum(1.-y_test)
 
     if printout:
-        print(f"Signal Efficiency with net outputs: {100*effic_test:4.1f}%")
-        print(f"Background Efficiency with net outputs: {100*bg_effic_test:6.5f}%")
+        print(f"Signal     efficiency with net outputs: {100*effic_test:4.1f}%")
+        print(f"Background efficiency with net outputs: {100*bg_effic_test:8.5f}%")
     else:
         # do we want to return anything here?
         return effic_test,bg_effic_test
