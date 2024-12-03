@@ -148,6 +148,7 @@ class lossvars():
             third.backgreffic.append(self.backgreffic)
             third.backgreffic.append(other.backgreffic)
         return third
+        
 
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
@@ -291,6 +292,7 @@ def effic_loss_fn(y_pred, y_true, features, net,
         loss.monotloss = epsilon*sumfeaturelosses
 
     return loss
+    
 
 def make_ROC_curve(y_test, y_pred_test):
     fpr, tpr, _ = roc_curve(y_test, y_pred_test.numpy())
@@ -307,6 +309,7 @@ def make_ROC_curve(y_test, y_pred_test):
     plt.title('ROC curve')
     plt.legend(loc="lower right")
     plt.show()
+    
 
 def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test):
     signal_train=[]
@@ -343,6 +346,7 @@ def plotlosses(losses, test_losses):
     plt.ylabel('Cross Entropy Loss')
     plt.yscale('log');
 
+
 def ploteffics(losses, targeteffics):
     if type(losses[0].signaleffic) is list:
         for e in range(len(losses[0].signaleffic)):
@@ -355,6 +359,7 @@ def ploteffics(losses, targeteffics):
     plt.xlabel('Training Epoch')
     plt.ylabel('Signal Efficiency')
     #plt.yscale('log')
+
 
 def check_effic(x_test_tensor, y_test, net, printout=True):
     num_pass_test=0.
@@ -383,6 +388,7 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
         # do we want to return anything here?
         return effic_test,bg_effic_test
 
+
 def plotcuts(net):
     fig = plt.figure(figsize=(20,5))
     fig.tight_layout()
@@ -403,6 +409,7 @@ def plotcuts(net):
         ax.set_ylabel("Cut value")
         ax.set_title(f"Feature {b}")
         ax.set_ylim([-10,10])
+
 
 def plotfeatures(net,x_signal,x_backgr,sc):
     # Distributions after scaling
