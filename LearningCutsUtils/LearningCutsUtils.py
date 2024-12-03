@@ -67,7 +67,7 @@ class OneToOneLinear(torch.nn.Module):
                 print(f"This network will learn weights and biases, since num weights ({len(weights)}) does not match num features ({features}).")
             self.weight = Parameter(torch.empty(features, **factory_kwargs))
         else:
-            self.weight = torch.tensor(weights)
+            self.register_buffer('weight', torch.tensor(weights))
         self.bias = Parameter(torch.empty(features, **factory_kwargs))
         self.activation_scale_factor = scalefactor
         self.post_product_root = postroot if postroot != None else 1.0
@@ -204,6 +204,11 @@ class EfficiencyScanNetwork(torch.nn.Module):
     def forward(self, x):
         outputs=torch.stack(tuple(self.nets[i](x) for i in range(len(self.effics))))
         return outputs
+
+    def to(self, device):
+        super().to(device)
+        for n in self.nets:
+            n.to(device)
 
 
 def effic_loss_fn(y_pred, y_true, features, net,
