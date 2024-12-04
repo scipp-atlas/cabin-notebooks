@@ -36,8 +36,8 @@ class OneToOneLinear(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        bound=1./math.sqrt(self.features)
         if self.trainable_weights:
+            bound=1./(self.features**0.5)
             torch.nn.init.uniform_(self.weight, -bound, bound)
         torch.nn.init.zeros_(self.bias)
 
