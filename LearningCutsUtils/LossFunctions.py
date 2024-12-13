@@ -37,6 +37,24 @@ class lossvars():
             third.backgreffic.append(other.backgreffic)
         return third
 
+
+# Basically a more sophisticated version of S/sqrt(B) or S/B.
+# see https://cds.cern.ch/record/2643488
+def ATLAS_significance_loss(y_pred,y_true,reluncert=0.2):
+    s=y_pred * y_true
+    b=y_pred * (1.-y_true)
+    n=s+b
+    sigma=reluncert*b
+    x=0
+    y=0
+    if sigma>0.0:
+        x=n*torch.log((n*(b+sigma*sigma))/(b*b+n*sigma*sigma))
+        y=(b*b/(sigma*sigma))*torch.log(1+(sigma*sigma*(n-b)/(b*(b+sigma*sigma))))
+    else:
+        x=n*torch.log(n/b)
+        y=(n-b)
+    return -torch.sqrt(2*(x-y))
+
     
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
@@ -162,3 +180,5 @@ def effic_loss_fn(y_pred, y_true, features, net,
         loss.monotloss = epsilon*sumfeaturelosses
 
     return loss
+
+
