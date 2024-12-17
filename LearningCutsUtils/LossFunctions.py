@@ -37,6 +37,24 @@ class lossvars():
             third.backgreffic.append(other.backgreffic)
         return third
 
+
+# Basically a more sophisticated version of S/sqrt(B) or S/B.
+# see https://cds.cern.ch/record/2643488
+def ATLAS_significance_loss(y_pred,y_true,reluncert=0.2):
+    s=y_pred * y_true
+    b=y_pred * (1.-y_true)
+    n=s+b
+    sigma=reluncert*b
+    x=0
+    y=0
+    if sigma>0.0:
+        x=n*torch.log((n*(b+sigma*sigma))/(b*b+n*sigma*sigma))
+        y=(b*b/(sigma*sigma))*torch.log(1+(sigma*sigma*(n-b)/(b*(b+sigma*sigma))))
+    else:
+        x=n*torch.log(n/b)
+        y=(n-b)
+    return -torch.sqrt(2*(x-y))
+
     
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
@@ -53,28 +71,22 @@ def loss_fn (y_pred, y_true, features, net,
     background_results = y_pred * (1.-y_true)
     loss.backgreffic = torch.sum(background_results)/(torch.sum(1.-y_true))
 
-    cuts=net.get_cuts()
     
-    # * force signal efficiency to converge to a target value
-    # * force background efficiency to small values at target efficiency value.
-    # * also prefer to have the cuts be close to zero, so they're not off at some crazy 
-    #   value even if we prefer for the cut to not have much impact on the efficiency 
-    #   or rejection.
-    #
-    # should modify the efficiency target requirement here, to make this more 
-    # like consistency with e.g. a gaussian distribution rather than just a penalty 
-    # calculated from r^2 distance.
-    #
-    # for both we should prefer to do something like "sum(square())" or something.
+    # * force signal efficiency to converge to a target value. should this be a 
+    #   relative efficiency difference, instead of absolute?  investigate this.
     loss.efficloss = alpha*torch.square(target_signal_efficiency-loss.signaleffic)
+
+    # * force background efficiency to small values.  will tend to overweight background
+    #   effic compared to signal effic since signal effic is squared.  investigate this.
     loss.backgloss = beta*loss.backgreffic
+
+    # * also prefer to have the cuts be close to zero, so they're not off at some crazy 
+    #   value even if the cut doesn't discriminate much
+    cuts=net.get_cuts()
     loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
 
     if debug:
         print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency:4.3f}, subnet_effic={loss.signaleffic:5.4f}, subnet_backg={loss.backgreffic:5.4f}, efficloss={loss.efficloss:4.3e}, backgloss={loss.backgloss:4.3e}")
-    
-    # sanity check in case we ever need it, should work
-    #loss=bce_loss_fn(outputs_to_labels(y_pred,features),y_true)
     
     return loss
 
@@ -168,3 +180,5 @@ def effic_loss_fn(y_pred, y_true, features, net,
         loss.monotloss = epsilon*sumfeaturelosses
 
     return loss
+
+
