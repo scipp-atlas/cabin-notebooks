@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from sklearn.metrics import roc_curve, roc_auc_score
 
 # Utility function for seeing what happens when taking gradient of loss function.
 def getBack(var_grad_fn):
@@ -31,12 +32,12 @@ def ListToGraph(l,bins,color,low=0,high=1,weight=0):
 
 
 def make_ROC_curve(y_test, y_pred_test):
-    fpr, tpr, _ = roc_curve(y_test, y_pred_test.numpy())
+    fpr, tpr, thresholds = roc_curve(y_test, y_pred_test.numpy())
     roc_auc = roc_auc_score(y_test, y_pred_test.numpy())
     
     plt.figure(1)
     lw = 2
-    plt.plot(fpr, tpr, color="darkorange", label="DNN (area = {:.3f})".format(roc_auc))
+    plt.plot(fpr, tpr, color="darkorange", label="AUC = {:.3f}".format(roc_auc))
     plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--")
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -44,10 +45,10 @@ def make_ROC_curve(y_test, y_pred_test):
     plt.ylabel('True positive rate')
     plt.title('ROC curve')
     plt.legend(loc="lower right")
-    plt.show()
+    #plt.show()
     
 
-def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test):
+def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test, nbins=20, range=(0,1)):
     signal_train=[]
     signal_test =[]
     backgr_train=[]
@@ -59,13 +60,12 @@ def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test):
         if y==1: signal_test.append(float(y_p))
         else:    backgr_test.append(float(y_p))
     
-    nbins=20
-    signal_train_hist=plt.hist(signal_train,nbins,density=True,range=(0,1),histtype='stepfilled',alpha=0.5,color='red')
-    backgr_train_hist=plt.hist(backgr_train,nbins,density=True,range=(0,1),histtype='stepfilled',alpha=0.5,color='blue')
-    signal_test=ListToGraph(signal_test,nbins,"red")
-    backgr_test=ListToGraph(backgr_test,nbins,"blue")
+    signal_train_hist=plt.hist(signal_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='red')
+    backgr_train_hist=plt.hist(backgr_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='blue')
+    signal_test=ListToGraph(signal_test,nbins,"red",low=range[0], high=range[1])
+    backgr_test=ListToGraph(backgr_test,nbins,"blue", low=range[0], high=range[1])
     plt.yscale("log")
-    plt.show()
+    #plt.show()
 
 
 def plotlosses(losses, test_losses):
@@ -74,12 +74,13 @@ def plotlosses(losses, test_losses):
     plt.plot([l.efficloss.detach().numpy() for l in losses], '.', label="Train: effic")
     plt.plot([l.backgloss.detach().numpy() for l in losses], '.', label="Train: backg")
     plt.plot([l.cutszloss.detach().numpy() for l in losses], '.', label="Train: cutsz")
+    plt.plot([l.BCEloss.detach().numpy() for l in losses], '.', label="Train: BCE")
     if type(losses[0].monotloss) is not int:
         # this particular term can get very small, just cut it off for super small values
         plt.plot([max(l.monotloss.detach().numpy(),1e-12) for l in losses], '.', label="Train: smooth")
     plt.legend()
     plt.xlabel('Training Epoch')
-    plt.ylabel('Cross Entropy Loss')
+    plt.ylabel('Loss')
     plt.yscale('log');
 
 
@@ -120,9 +121,8 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
     if printout:
         print(f"Signal     efficiency with net outputs: {100*effic_test:4.1f}%")
         print(f"Background efficiency with net outputs: {100*bg_effic_test:8.5f}%")
-    else:
-        # do we want to return anything here?
-        return effic_test,bg_effic_test
+
+    return effic_test,bg_effic_test
 
 
 def plotcuts(net):
@@ -176,3 +176,30 @@ def plotfeatures(net,x_signal,x_backgr,sc):
             else:
                 ax.axvline(x = scaled_cuts[b], color='y') # cut is "greater than"
         plt.show()
+
+def noisify(x_tensor, y_tensor, weights, noiserate=0.10):
+
+    signal_noise = noiserate*torch.rand(len(x_tensor),m)*y_tensor.unsqueeze(1)
+    backgr_noise = noiserate*torch.rand(len(x_tensor),m)*(1-y_tensor).unsqueeze(1)
+    weightsigns=torch.sign(weights)
+    for i in range(len(weightsigns)):
+        if weightsigns[i]>0:
+            signal_noise[:,i] = -signal_noise[:,i]
+        else:
+            backgr_noise[:,i] = -backgr_noise[:,i]
+    
+    return x_tensor + signal_noise + backgr_noise
+    
+
+def getcuteffic(y_test_pred, y_test_true, signal=True):
+    y_test = y_test_true if signal else (1-y_test_true)
+    passes = (y_test_pred*y_test > thresh).sum().item()
+    total  = (y_test > 0.5).sum().item()
+    return passes/total
+
+def getefficcut(y_test_pred,y_test_true,targeteffic):
+    fpr, tpr, thresholds = roc_curve(y_test_true, y_test_pred.numpy())
+    thresh=0
+    for i in range(len(tpr)):
+        if tpr[i]<=targeteffic and tpr[i+1]>targeteffic:
+            return thresholds[i],tpr[i]

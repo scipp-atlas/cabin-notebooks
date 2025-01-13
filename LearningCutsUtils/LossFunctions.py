@@ -8,11 +8,12 @@ class lossvars():
         self.backgloss = 0
         self.cutszloss = 0
         self.monotloss = 0
+        self.BCEloss = 0
         self.signaleffic = 0
         self.backgreffic = 0
     
     def totalloss(self):
-        return self.efficloss + self.backgloss + self.cutszloss + self.monotloss
+        return self.efficloss + self.backgloss + self.cutszloss + self.monotloss + self.BCEloss
 
     def __add__(self,other):
         third=lossvars()
@@ -20,7 +21,8 @@ class lossvars():
         third.backgloss = self.backgloss + other.backgloss
         third.cutszloss = self.cutszloss + other.cutszloss
         third.monotloss = self.monotloss + other.monotloss
-
+        third.BCEloss   = self.BCEloss   + other.BCEloss
+        
         if type(self.signaleffic) is list:
             third.signaleffic = self.signaleffic
             third.signaleffic.append(other.signaleffic)
@@ -51,6 +53,7 @@ def ATLAS_significance_loss(y_pred,y_true,reluncert=0.2):
         x=n*torch.log((n*(b+sigma*sigma))/(b*b+n*sigma*sigma))
         y=(b*b/(sigma*sigma))*torch.log(1+(sigma*sigma*(n-b)/(b*(b+sigma*sigma))))
     else:
+        # avoid divergence at sigma=0 by approximating ln(1+epsilon)~epsilon
         x=n*torch.log(n/b)
         y=(n-b)
     return -torch.sqrt(2*(x-y))
@@ -58,11 +61,11 @@ def ATLAS_significance_loss(y_pred,y_true,reluncert=0.2):
     
 def loss_fn (y_pred, y_true, features, net, 
              target_signal_efficiency=0.8,
-             alpha=1., beta=1., gamma=0.001,
+             alpha=1., beta=1., gamma=0.001, delta=0.,
              debug=False):
 
     loss = lossvars()
-    
+
     # signal efficiency: (selected events that are true signal) / (number of true signal)
     signal_results = y_pred * y_true
     loss.signaleffic = torch.sum(signal_results)/torch.sum(y_true)
@@ -72,19 +75,22 @@ def loss_fn (y_pred, y_true, features, net,
     loss.backgreffic = torch.sum(background_results)/(torch.sum(1.-y_true))
 
     
-    # * force signal efficiency to converge to a target value. should this be a 
-    #   relative efficiency difference, instead of absolute?  investigate this.
+    # force signal efficiency to converge to a target value. should this be a 
+    # relative efficiency difference, instead of absolute?  investigate this.
     loss.efficloss = alpha*torch.square(target_signal_efficiency-loss.signaleffic)
 
-    # * force background efficiency to small values.  will tend to overweight background
-    #   effic compared to signal effic since signal effic is squared.  investigate this.
+    # force background efficiency to small values.  will tend to overweight background
+    # effic compared to signal effic since signal effic is squared.  investigate this.
     loss.backgloss = beta*loss.backgreffic
 
-    # * also prefer to have the cuts be close to zero, so they're not off at some crazy 
-    #   value even if the cut doesn't discriminate much
+    # also prefer to have the cuts be close to zero, so they're not off at some crazy 
+    # value even if the cut doesn't discriminate much
     cuts=net.get_cuts()
     loss.cutszloss = gamma*torch.sum(torch.square(cuts))/features
 
+    # calculate the BCE loss, just because.
+    loss.BCEloss = delta*torch.nn.BCELoss()(y_pred, y_true)    
+    
     if debug:
         print(f"Inspecting efficiency loss: alpha={alpha}, target={target_signal_efficiency:4.3f}, subnet_effic={loss.signaleffic:5.4f}, subnet_backg={loss.backgreffic:5.4f}, efficloss={loss.efficloss:4.3e}, backgloss={loss.backgloss:4.3e}")
     
@@ -95,7 +101,7 @@ def loss_fn (y_pred, y_true, features, net,
 
 
 def effic_loss_fn(y_pred, y_true, features, net,
-                  alpha=1., beta=1., gamma=0.001, epsilon=0.001,
+                  alpha=1., beta=1., gamma=0.001, delta=0., epsilon=0.001,
                   debug=False):
 
     # probably a better way to do this, but works for now
@@ -105,7 +111,7 @@ def effic_loss_fn(y_pred, y_true, features, net,
         efficnet = net.nets[i]
         l=loss_fn(y_pred[i], y_true, features, 
                   efficnet, effic,
-                  alpha, beta, gamma, debug)
+                  alpha, beta, gamma, delta, debug)
         if sumefficlosses==None:
             sumefficlosses=l
         else:
