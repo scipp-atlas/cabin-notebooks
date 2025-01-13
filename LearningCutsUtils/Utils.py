@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import uproot
+import awkward as ak
 import torch
 from sklearn.metrics import roc_curve, roc_auc_score
 
@@ -125,7 +127,7 @@ def check_effic(x_test_tensor, y_test, net, printout=True):
     return effic_test,bg_effic_test
 
 
-def plotcuts(net):
+def plotgenericcuts(net):
     fig = plt.figure(figsize=(20,5))
     fig.tight_layout()
     targeteffics=net.effics
@@ -203,3 +205,166 @@ def getefficcut(y_test_pred,y_test_true,targeteffic):
     for i in range(len(tpr)):
         if tpr[i]<=targeteffic and tpr[i+1]>targeteffic:
             return thresholds[i],tpr[i]
+        
+def plotcuts(net):
+    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    fig = plt.figure(figsize=(12,8))
+    fig.tight_layout()
+    targeteffics=net.effics
+    m=net.features
+    
+    scaled_cuts=[len(targeteffics)*[0] for i in range(m)]
+    for n in range(len(targeteffics)):
+        cuts=net.nets[n].get_cuts().detach().numpy()
+        for f in range(m):
+            cutval=cuts[f]
+            scaled_cuts[f][n]=cutval
+    for b in range(m):
+        ax=fig.add_subplot(3,3,1+b)
+        plt.subplots_adjust(hspace=0.6,wspace=0.5)
+        ax.plot(targeteffics,scaled_cuts[b])
+        ax.set_xlabel(f"Target Efficiency")
+        ax.set_ylabel("Cut value")
+        ax.set_title(f"{latex_string[b]}")
+        ax.set_ylim([-3,3])
+
+
+def data_concat(fp,fn,tn,feats):
+    full_path = [f"{fp}{file}" for file in fn]
+
+    data=[]
+    for file_path in full_path:
+        with uproot.open(file_path) as events:
+            data.append(events[tn].arrays(feats))
+    
+    return ak.concatenate(data)
+
+def data_mask(d,e,eta):
+    # print('.')
+    # takes awk array and converts to numpy and sorts features
+    datalist=['ph.pt', 'ph.eta', 'ph.rhad1', 'ph.reta', 'ph.rphi', 'ph.weta2', 'ph.eratio', 'ph.deltae', 'ph.wstot', 'ph.fside', 'ph.w1', 'ph.truth_pdgId', 'ph.truth_type', 'ph.convFlag']
+    # for i in datalist:
+    #     print(f'{i:7f},{len(data[i])},{type(data[i])}')
+    mask = (d['ph.pt'] >= e[0]) & (d['ph.pt'] < e[1]) & (abs(d['ph.eta']) < eta[1]) & (abs(d['ph.eta']) >= eta[0]) & (d['ph.wstot'] >= 0) & (d['ph.w1'] >= 0)
+    # print('.')
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8,3))
+    
+    myrange_pt = (15,20)
+    nbins_pt=20
+    binwidth_pt=(myrange_pt[1]-myrange_pt[0])/nbins_pt
+    ax1.hist(((d['ph.pt'])/1000)[mask],density=True, bins=nbins_pt, range=myrange_pt,color = 'grey')
+    ax1.set_xlabel('Transverse Momentum $p_{t}$ [GeV]',loc = 'right')
+    ax1.set_ylabel(f"1/N dN/d({'$p_{t}$'})",loc = 'top')
+    
+    nbins_eta=20
+    myrange_eta=(-4,4)
+    binwidth_eta=(myrange_eta[1]-myrange_eta[0])/nbins_eta
+    ax2.hist(d["ph.eta"][mask],density=True, bins=nbins_eta, range=myrange_eta, color = 'grey')
+    ax2.set_xlabel('Psuedorapidity $\eta$',loc = 'right')
+    ax2.set_ylabel("1/N dN/d($\eta$)",loc = 'top')
+    plt.tight_layout()
+    numpy_data = {}
+    
+    for i in datalist:
+        numpy_array = ak.to_numpy(d[i][mask])
+        numpy_data[i] = numpy_array
+        # print(i,len(numpy_array),type(numpy_array))
+    print(f'This mask includes {len(numpy_array)} event candidates:')
+    return numpy_data
+    
+def get_labels(d):
+    labels = []
+    for i in range(len(d['ph.pt'])):
+        if d['ph.truth_pdgId'][i] == 22 and (d['ph.truth_type'][i]==15 or d['ph.truth_type'][i]==13 or d['ph.truth_type'][i]==14):
+            labels.append(1)
+        else:
+            labels.append(0)
+    return torch.Tensor(labels)
+    
+def true_sort(d,ls):
+    dlist=['ph.pt', 'ph.eta', 'ph.rhad1', 'ph.reta', 'ph.rphi', 'ph.weta2', 'ph.eratio', 'ph.deltae', 'ph.wstot', 'ph.fside', 'ph.w1', 'ph.truth_pdgId', 'ph.truth_type', 'ph.convFlag']
+    truedata = {}
+    falsedata = {}
+    for i in range(0,11):
+        truelist = []
+        falselist = []
+        for j in range(0,len(ls)):
+            if ls[j] == 1:
+                truelist.append(d[dlist[i]][j])
+            else:
+                falselist.append(d[dlist[i]][j])
+        truedata[i] = truelist
+        falsedata[i] = falselist
+        
+    print('We are working with:')
+    print(f'{len(truelist)} Signal Events')
+    print(f'{len(falselist)} Backround Events')
+    print(f'Signal:Backround = {(len(truelist)/len(falselist)):.3f}')
+    return truedata, falsedata
+
+def plot_signal(t,f):
+    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(12, 8))
+    ranges = [(-0.05,0.25),(0.2,1.1),(0.2,1.1),(0,0.025),(0,1),(0,8000),(0,15),(0,1.),(0,1.)]
+    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    nbins = 20
+    for i, ax in enumerate(axes.flatten()):
+        ax.hist(f[i+2],density=True, range = ranges[i],bins=nbins,histtype = 'stepfilled',color='grey',alpha = 0.9, edgecolor='black', label = 'Backround')
+        ax.hist(t[i+2], density=True, range = ranges[i],bins=nbins,histtype = 'stepfilled',color='white',alpha = 0.75, edgecolor='black', label = 'Signal')
+        ax.set_xlabel(latex_string[i],loc = 'right')
+        ax.set_ylabel(f"1/N dN/d({latex_string[i]})",loc = 'top')
+        if i == 0:
+            ax.legend()
+            # ax.set_title('**ATLAS**\nPrelimiary\nData',y=0.85)
+        ax.set_yscale('log')
+    fig.tight_layout()
+
+def plot_feats(d):
+    discriminating_vars = ['ph.rhad1','ph.reta','ph.rphi','ph.weta2','ph.eratio','ph.deltae','ph.wstot','ph.fside','ph.w1']
+    fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(10, 8))
+    ranges = [(-0.05,0.25),(0.2,1.1),(0.2,1.1),(0,0.025),(0,1),(0,8000),(0,15),(0,1.),(0,1.)]
+    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    nbins = 20
+    for i, ax in enumerate(axes.flatten()):
+        ax.hist(d[discriminating_vars[i]], density=True, range = ranges[i],bins=nbins,histtype = 'stepfilled',color='grey',alpha = 0.75, edgecolor='black')
+        ax.set_xlabel(latex_string[i],loc = 'right')
+        ax.set_ylabel(f"1/N dN/d({latex_string[i]})",loc = 'top')
+        ax.set_yscale('log')
+    fig.tight_layout()
+
+
+
+def test_train_split(d,ratio):
+    loosetrues = []
+    for i in range(len(d['ph.pt'])):
+        if d['ph.truth_pdgId'][i] == 22 and d['ph.truth_type'][i]==15 or d['ph.truth_type'][i]==13 or d['ph.truth_type'][i]==14:
+            true = 1
+        else:
+            true = 0
+        loosetrues.append(true)
+    loosetrues = torch.Tensor(loosetrues)
+    dlist=['ph.rhad1', 'ph.reta', 'ph.rphi', 'ph.weta2', 'ph.eratio', 'ph.deltae', 'ph.wstot', 'ph.fside', 'ph.w1']
+    x_train_list = []
+
+    for i in dlist:
+        x_train_array = torch.from_numpy(d[i])
+        x_train_list.append(x_train_array)
+    
+    x_train_tensor = torch.stack(x_train_list)
+
+    
+    from sklearn.model_selection import train_test_split
+
+    X_train, X_test, y_train, y_test = train_test_split(x_train_tensor.T,loosetrues, test_size=ratio, random_state=42)
+    
+    from sklearn.preprocessing import StandardScaler
+    sc = StandardScaler()
+    
+    X_train = sc.fit_transform(X_train)
+    X_test = sc.transform(X_test)
+    
+    x_train_tensor = torch.tensor(X_train, dtype=torch.float).detach()
+    y_train_tensor=y_train
+    
+    x_test_tensor = torch.tensor(X_test, dtype=torch.float).detach()
+    y_test_tensor=y_test
+    return x_train_tensor, y_train_tensor, x_test_tensor, y_test_tensor
