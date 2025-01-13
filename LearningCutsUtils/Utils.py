@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import uproot
-import awkward as ak
+#import uproot
+#import awkward as ak
 import torch
 from sklearn.metrics import roc_curve, roc_auc_score
 
@@ -181,8 +181,8 @@ def plotfeatures(net,x_signal,x_backgr,sc):
 
 def noisify(x_tensor, y_tensor, weights, noiserate=0.10):
 
-    signal_noise = noiserate*torch.rand(len(x_tensor),m)*y_tensor.unsqueeze(1)
-    backgr_noise = noiserate*torch.rand(len(x_tensor),m)*(1-y_tensor).unsqueeze(1)
+    signal_noise = noiserate*torch.rand(x_tensor.shape[0],x_tensor.shape[1])*y_tensor.unsqueeze(1)
+    backgr_noise = noiserate*torch.rand(x_tensor.shape[0],x_tensor.shape[1])*(1-y_tensor).unsqueeze(1)
     weightsigns=torch.sign(weights)
     for i in range(len(weightsigns)):
         if weightsigns[i]>0:
@@ -193,7 +193,7 @@ def noisify(x_tensor, y_tensor, weights, noiserate=0.10):
     return x_tensor + signal_noise + backgr_noise
     
 
-def getcuteffic(y_test_pred, y_test_true, signal=True):
+def getcuteffic(y_test_pred, y_test_true, thresh, signal=True):
     y_test = y_test_true if signal else (1-y_test_true)
     passes = (y_test_pred*y_test > thresh).sum().item()
     total  = (y_test > 0.5).sum().item()
@@ -202,12 +202,15 @@ def getcuteffic(y_test_pred, y_test_true, signal=True):
 def getefficcut(y_test_pred,y_test_true,targeteffic):
     fpr, tpr, thresholds = roc_curve(y_test_true, y_test_pred.numpy())
     thresh=0
+    #print(thresholds)
+    #print(tpr)
+    #print(fpr)
     for i in range(len(tpr)):
         if tpr[i]<=targeteffic and tpr[i+1]>targeteffic:
             return thresholds[i],tpr[i]
         
 def plotcuts(net):
-    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    latex_string = ['$R_{{had}}$','$R_{{\\eta}}$','$R_{{\\phi}}$','$w_{{\\eta^{{2}}}}$','$E_{{ratio}}$','$\\Delta E [MeV]$','$w^{{tot}}_{{\\eta 1}}$','$F_{{side}}$','$w_{{\\eta^{{3}}_{{\\eta 1}}}}$']
     fig = plt.figure(figsize=(12,8))
     fig.tight_layout()
     targeteffics=net.effics
@@ -253,15 +256,15 @@ def data_mask(d,e,eta):
     nbins_pt=20
     binwidth_pt=(myrange_pt[1]-myrange_pt[0])/nbins_pt
     ax1.hist(((d['ph.pt'])/1000)[mask],density=True, bins=nbins_pt, range=myrange_pt,color = 'grey')
-    ax1.set_xlabel('Transverse Momentum $p_{t}$ [GeV]',loc = 'right')
+    ax1.set_xlabel('Transverse Momentum $p_{\\mathrm{T}}$ [GeV]',loc = 'right')
     ax1.set_ylabel(f"1/N dN/d({'$p_{t}$'})",loc = 'top')
     
     nbins_eta=20
     myrange_eta=(-4,4)
     binwidth_eta=(myrange_eta[1]-myrange_eta[0])/nbins_eta
     ax2.hist(d["ph.eta"][mask],density=True, bins=nbins_eta, range=myrange_eta, color = 'grey')
-    ax2.set_xlabel('Psuedorapidity $\eta$',loc = 'right')
-    ax2.set_ylabel("1/N dN/d($\eta$)",loc = 'top')
+    ax2.set_xlabel('Psuedorapidity $\\eta$',loc = 'right')
+    ax2.set_ylabel("1/N dN/d($\\eta$)",loc = 'top')
     plt.tight_layout()
     numpy_data = {}
     
@@ -305,7 +308,7 @@ def true_sort(d,ls):
 def plot_signal(t,f):
     fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(12, 8))
     ranges = [(-0.05,0.25),(0.2,1.1),(0.2,1.1),(0,0.025),(0,1),(0,8000),(0,15),(0,1.),(0,1.)]
-    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    latex_string = ['$R_{{had}}$','$R_{{\\eta}}$','$R_{{\\phi}}$','$w_{{\\eta^{{2}}}}$','$E_{{ratio}}$','$\\Delta E [MeV]$','$w^{{tot}}_{{\\eta 1}}$','$F_{{side}}$','$w_{{\\eta^{{3}}_{{\\eta 1}}}}$']
     nbins = 20
     for i, ax in enumerate(axes.flatten()):
         ax.hist(f[i+2],density=True, range = ranges[i],bins=nbins,histtype = 'stepfilled',color='grey',alpha = 0.9, edgecolor='black', label = 'Backround')
@@ -322,7 +325,7 @@ def plot_feats(d):
     discriminating_vars = ['ph.rhad1','ph.reta','ph.rphi','ph.weta2','ph.eratio','ph.deltae','ph.wstot','ph.fside','ph.w1']
     fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(10, 8))
     ranges = [(-0.05,0.25),(0.2,1.1),(0.2,1.1),(0,0.025),(0,1),(0,8000),(0,15),(0,1.),(0,1.)]
-    latex_string = ['$R_{{had}}$','$R_{{\eta}}$','$R_{{\phi}}$','$w_{{\eta^{{2}}}}$','$E_{{ratio}}$','$\Delta E [MeV]$','$w^{{tot}}_{{\eta 1}}$','$F_{{side}}$','$w_{{\eta^{{3}}_{{\eta 1}}}}$']
+    latex_string = ['$R_{{had}}$','$R_{{\\eta}}$','$R_{{\\phi}}$','$w_{{\\eta^{{2}}}}$','$E_{{ratio}}$','$\\Delta E [MeV]$','$w^{{tot}}_{{\\eta 1}}$','$F_{{side}}$','$w_{{\\eta^{{3}}_{{\\eta 1}}}}$']
     nbins = 20
     for i, ax in enumerate(axes.flatten()):
         ax.hist(d[discriminating_vars[i]], density=True, range = ranges[i],bins=nbins,histtype = 'stepfilled',color='grey',alpha = 0.75, edgecolor='black')
@@ -368,3 +371,28 @@ def test_train_split(d,ratio):
     x_test_tensor = torch.tensor(X_test, dtype=torch.float).detach()
     y_test_tensor=y_test
     return x_train_tensor, y_train_tensor, x_test_tensor, y_test_tensor
+
+
+def check_noisy_test_inputs(x_test_tensor, y_test_tensor, net, weights, targeteffic=0.95):
+    x_test_tensor_noisy = noisify(x_test_tensor, y_test_tensor, weights)
+    y_pred_test_noisy   = net(x_test_tensor_noisy).detach().cpu()
+    y_pred_test_clean   = net(x_test_tensor).detach().cpu()
+
+    thresh,thresheffic=getefficcut(y_pred_test_clean,y_test_tensor,targeteffic)    
+    print(thresh)
+    print(thresheffic)
+    
+    print()
+    # signal efficiency
+    print(getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=True))
+    print(getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=True))
+    print()
+    
+    # background efficiency
+    print(getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=False))
+    print(getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=False))
+    print()
+    
+    thresh_noisy,thresheffic_noisy=getefficcut(y_pred_test_noisy,y_test_tensor,targeteffic)    
+    print(thresh_noisy)
+    print(thresheffic_noisy)
