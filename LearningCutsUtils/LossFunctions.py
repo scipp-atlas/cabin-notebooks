@@ -41,7 +41,7 @@ class lossvars():
 
 
 # Basically a more sophisticated version of S/sqrt(B) or S/B.
-# see https://cds.cern.ch/record/2643488
+# see https://cds.cern.ch/record/2736148
 def ATLAS_significance_loss(y_pred,y_true,reluncert=0.2):
     s=y_pred * y_true
     b=y_pred * (1.-y_true)
@@ -81,6 +81,9 @@ def loss_fn (y_pred, y_true, features, net,
 
     # force background efficiency to small values.  will tend to overweight background
     # effic compared to signal effic since signal effic is squared.  investigate this.
+    # generally prefer for loss functions to be sum-of-squares to ensure loss is convex,
+    # but in this case the background efficiency is strictly positive, and we want to
+    # push it to zero.
     loss.backgloss = beta*loss.backgreffic
 
     # also prefer to have the cuts be close to zero, so they're not off at some crazy 

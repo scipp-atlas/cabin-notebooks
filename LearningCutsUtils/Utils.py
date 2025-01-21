@@ -20,7 +20,7 @@ def getBack(var_grad_fn):
                 getBack(n[0])
                 
 
-def ListToGraph(l,bins,color,low=0,high=1,weight=0):
+def ListToGraph(l,bins,color,low=0,high=1,weight=0,label=""):
     counts,bin_edges = np.histogram(l,bins,range=(low,high))
     bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
     err = np.sqrt(counts)
@@ -28,7 +28,7 @@ def ListToGraph(l,bins,color,low=0,high=1,weight=0):
         weight=1./(sum(counts)*(bin_edges[1]-bin_edges[0]))
     counts = weight*counts
     err = weight*err
-    return plt.errorbar(bin_centres, counts, yerr=err, fmt='o',color=color)
+    return plt.errorbar(bin_centres, counts, yerr=err, fmt='o',color=color,label=label)
 
 
 
@@ -45,7 +45,7 @@ def make_ROC_curve(y_test, y_pred_test):
     plt.ylim([0.0, 1.05])
     plt.xlabel('False positive rate')
     plt.ylabel('True positive rate')
-    plt.title('ROC curve')
+    #plt.title('ROC curve')
     plt.legend(loc="lower right")
     #plt.show()
     
@@ -62,11 +62,14 @@ def plot_classifier_output(y_train, y_pred_train,y_test, y_pred_test, nbins=20, 
         if y==1: signal_test.append(float(y_p))
         else:    backgr_test.append(float(y_p))
     
-    signal_train_hist=plt.hist(signal_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='red')
-    backgr_train_hist=plt.hist(backgr_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='blue')
-    signal_test=ListToGraph(signal_test,nbins,"red",low=range[0], high=range[1])
-    backgr_test=ListToGraph(backgr_test,nbins,"blue", low=range[0], high=range[1])
+    signal_train_hist=plt.hist(signal_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='red',label="Train: signal")
+    backgr_train_hist=plt.hist(backgr_train,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='blue', label="Train: background")
+    signal_test=ListToGraph(signal_test,nbins,"red",low=range[0], high=range[1], label="Test: signal")
+    backgr_test=ListToGraph(backgr_test,nbins,"blue", low=range[0], high=range[1], label="Test: background")
     plt.yscale("log")
+    plt.xlabel('Output Score')
+    plt.ylabel('Arbitrary Units')
+    plt.legend(loc="upper center")
     #plt.show()
 
 
@@ -167,7 +170,7 @@ def plotfeatures(net,x_signal,x_backgr,sc):
         
         for b in range(m):
             ax=fig.add_subplot(2,5,1+b)
-            plt.subplots_adjust(hspace=0.3,wspace=0.5)
+            plt.subplots_adjust(hspace=0.5,wspace=0.5)
             plt.yscale('log')
             ax.hist(x_signal_scaled[:,b],nbins,density=True,histtype='stepfilled',alpha=0.5,color='red')
             ax.hist(x_backgr_scaled[:,b],nbins,density=True,histtype='stepfilled',alpha=0.5,color='blue')
@@ -373,26 +376,33 @@ def test_train_split(d,ratio):
     return x_train_tensor, y_train_tensor, x_test_tensor, y_test_tensor
 
 
-def check_noisy_test_inputs(x_test_tensor, y_test_tensor, net, weights, targeteffic=0.95):
-    x_test_tensor_noisy = noisify(x_test_tensor, y_test_tensor, weights)
+def check_noisy_test_inputs(x_test_tensor, y_test_tensor, net, weights, targeteffic=0.95, noiserate=0.10):
+    x_test_tensor_noisy = noisify(x_test_tensor, y_test_tensor, weights, noiserate)
     y_pred_test_noisy   = net(x_test_tensor_noisy).detach().cpu()
     y_pred_test_clean   = net(x_test_tensor).detach().cpu()
 
     thresh,thresheffic=getefficcut(y_pred_test_clean,y_test_tensor,targeteffic)    
-    print(thresh)
-    print(thresheffic)
+    print(f"Output threshold for {targeteffic*100:4.1f}% efficiency: {thresh} gives {thresheffic*100:4.1f}%")
+    #print(thresheffic)
     
     print()
-    # signal efficiency
-    print(getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=True))
-    print(getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=True))
+    # signal 
+    if len(y_pred_test_noisy.shape)>1: 
+        print(f"Signal efficiency for nominal, output>{thresh}: {getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=True)}")
+        print(f"Signal efficiency for noisy  , output>{thresh}: {getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=True)}")
+    else:
+        print(f"Signal efficiency for nominal, output>{thresh}: {getcuteffic(y_pred_test_clean, y_test_tensor, thresh, signal=True)}")
+        print(f"Signal efficiency for noisy  , output>{thresh}: {getcuteffic(y_pred_test_noisy, y_test_tensor, thresh, signal=True)}")
     print()
     
     # background efficiency
-    print(getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=False))
-    print(getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=False))
+    if len(y_pred_test_noisy.shape)>1: 
+        print(f"Backgr efficiency for nominal, output>{thresh}: {getcuteffic(y_pred_test_clean.squeeze(1), y_test_tensor, thresh, signal=False)}")
+        print(f"Backgr efficiency for noisy  , output>{thresh}: {getcuteffic(y_pred_test_noisy.squeeze(1), y_test_tensor, thresh, signal=False)}")
+    else:
+        print(f"Backgr efficiency for nominal, output>{thresh}: {getcuteffic(y_pred_test_clean, y_test_tensor, thresh, signal=False)}")
+        print(f"Backgr efficiency for noisy  , output>{thresh}: {getcuteffic(y_pred_test_noisy, y_test_tensor, thresh, signal=False)}")
     print()
     
     thresh_noisy,thresheffic_noisy=getefficcut(y_pred_test_noisy,y_test_tensor,targeteffic)    
-    print(thresh_noisy)
-    print(thresheffic_noisy)
+    print(f"Output threshold for {targeteffic*100:4.1f}% efficiency if trained on noisy data: {thresh_noisy} gives {thresheffic_noisy*100:4.1f}%")
