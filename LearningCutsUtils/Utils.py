@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 #import awkward as ak
 import torch
 from sklearn.metrics import roc_curve, roc_auc_score
+import pandas as pd
 
 # Utility function for seeing what happens when taking gradient of loss function.
 def getBack(var_grad_fn):
@@ -406,3 +407,126 @@ def check_noisy_test_inputs(x_test_tensor, y_test_tensor, net, weights, targetef
     
     thresh_noisy,thresheffic_noisy=getefficcut(y_pred_test_noisy,y_test_tensor,targeteffic)    
     print(f"Output threshold for {targeteffic*100:4.1f}% efficiency if trained on noisy data: {thresh_noisy} gives {thresheffic_noisy*100:4.1f}%")
+
+def get_scores_by_label(x_tensor, y_tensor, net):
+    tp_scores=[]
+    tn_scores=[]
+    fp_scores=[]
+    fn_scores=[]
+    outputs = net.apply_cuts(x_tensor).detach().cpu()
+    scores  = net(x_tensor).detach().cpu()
+    m=outputs.shape[1]
+    trues=torch.tensor(m*[True])
+    for i in range(len(outputs)):
+    
+        tt=torch.zeros(m)
+        t=torch.gt(outputs[i],tt)
+    
+        if torch.equal(t,trues) and y_tensor[i]==1.:
+            tp_scores.append(scores[i])
+        elif torch.equal(t,trues) and y_tensor[i]!=1.:
+            fp_scores.append(scores[i])
+        elif y_tensor[i]==1.:
+            fn_scores.append(scores[i])
+        elif y_tensor[i]!=1.:
+            tn_scores.append(scores[i])
+
+    return tp_scores, tn_scores, fp_scores, fn_scores
+
+def plot_classifier_output_by_label(y_tp,y_fp,y_tn,y_fn, nbins=10, range=(0,1)):
+
+    tp_hist=plt.hist(y_tp,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='red'   , label="True Signal: Pass")
+    fn_hist=plt.hist(y_fn,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='yellow', label="True Signal: Fail")
+    tn_hist=plt.hist(y_tn,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='blue'  , label="True Background: Fail")
+    fp_hist=plt.hist(y_fp,nbins,density=True,range=range,histtype='stepfilled',alpha=0.5,color='green' , label="True Background: Pass")
+
+    plt.yscale("log")
+    plt.xlabel('Output Score')
+    plt.ylabel('Arbitrary Units')
+    plt.legend(loc="upper center")
+
+def load_random_data():
+    # array of means and widths for gaussians,
+    # indices are:
+    # - number of dimensions
+    # - signal (0) vs background (1)
+    # - mean (0) vs width (1)
+
+    N=20000 # number of points
+    m=10 # dimensions
+    
+    np.random.seed(123)
+    width_scale_factor=2.
+    mean_scale_factor=1.
+    
+    # if we want more control over the function, for example
+    means_widths=[[[4,0.4],
+                   [-2,.10]],
+                  [[3,1.0],
+                   [-1,0.5]]]
+    
+    means_widths=np.random.randn(m,2,2)               
+    
+    # now construct the training data.  after taking transpose, should be N rows by m columns.  
+    x_signal=np.array([mean_scale_factor*means_widths[i][0][0]+width_scale_factor*np.fabs(means_widths[i][0][1])*np.random.randn(N) for i in range(m)]).T
+    y_signal=np.ones(N)
+    x_backgr=np.array([mean_scale_factor*means_widths[i][1][0]+width_scale_factor*np.fabs(means_widths[i][1][1])*np.random.randn(N) for i in range(m)]).T
+    y_backgr=np.zeros(N)
+
+    return x_signal, y_signal, x_backgr, y_backgr, [f"Feature {b}" for b in range(m)]
+
+
+def load_SUSY_data():
+    # Prep Data using Pandas
+    x_sig_data=None
+    y_sig_data=None
+    
+    x_bkg_data=None
+    y_bkg_data=None
+    
+    num_sig_events=0
+    num_bkg_events=0
+    
+    # Need to copy the last branch, Rll, so that we have a total of 5 branches
+    branches=[
+        'lep1MT_Met','lep1_DPhiMet',
+        'lep2MT_Met','lep2_DPhiMet',
+        'jet0Pt','Rll','met_Et',
+    #    ,'lep1Pt','lep2Pt',
+    #    ,'lep1Eta','lep1Phi', 
+    #    ,'lep2Eta','lep2Phi'
+    #    ,'met_Phi'
+    #    'nJet30','mt2leplsp_100'
+    ]
+    
+    # open signal
+    mass=200
+    split=30
+    filepath='/data/mhance/SUSY/Compressed/'
+    filebase='SusySkimSlep_v0.2_SlepSignals__'
+    filename='MGPy8EG_A14N23LO_SlepSlep_dir_2L2MET75_%dp0_%dp0_NoSys' % (mass,mass-split)
+    filesuff='.hf5'
+    
+    # Makes data frame for signal events
+    fullname=filepath+filebase+filename+filesuff
+    df = pd.read_hdf(fullname, key=filename)
+    mask = (df['lep1Pt']>10) & (df['lep2Pt']>10) & (df['nBJet30']==0) & (df['met_Et']>300) & (df['minDPhiAllJetsMet']>0.4)
+    df = df[mask]
+    df1 = df[branches].to_numpy()
+    num_sig_events = len(df1)
+    x_signal = df1
+    y_signal = np.ones(num_sig_events)
+    #print("Extracted %7d signal events" % num_sig_events)
+
+    # Now background
+    fullname=filepath+"SusySkimSlep_v0.2_diboson2L__diboson2L_NoSys"+filesuff
+    df = pd.read_hdf(fullname, key='diboson2L_NoSys')
+    mask = (df['lep1Pt']>10) & (df['lep2Pt']>10) & (df['nBJet30']==0) & (df['met_Et']>300) & (df['minDPhiAllJetsMet']>0.4)
+    df = df[mask]
+    df2 = df[branches].to_numpy()
+    num_bkg_events = len(df2)
+    x_backgr = df2
+    y_backgr=np.zeros(num_bkg_events)
+    #print("Extracted %7d background events" % num_bkg_events)    
+
+    return x_signal, y_signal, x_backgr, y_backgr, branches

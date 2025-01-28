@@ -50,6 +50,10 @@ class OneToOneLinear(torch.nn.Module):
         targets = torch.matmul(input,torch.diag(self.weight))+self.bias
         return targets
 
+    def pass_cuts(self, input: Tensor) -> Tensor:
+        t=self.apply_cuts(input)
+        return (torch.all(t>0,dim=1))
+
     def forward(self, input: Tensor) -> Tensor:
         # apply the cuts
         targets = self.apply_cuts(input)
